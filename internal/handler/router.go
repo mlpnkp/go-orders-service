@@ -2,12 +2,15 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
 	"example.com/order-service/internal/order"
-	"github.com/go-chi/chi/v5"
 )
 
 type OrderService interface {
@@ -18,48 +21,67 @@ type OrderService interface {
 	History(ctx context.Context, id int64) ([]order.StatusChange, error)
 }
 
-type Handler struct {
+type api struct {
 	service OrderService
 	logger  *slog.Logger
 }
 
 func NewRouter(service OrderService, logger *slog.Logger) http.Handler {
-	h := &Handler{service: service, logger: logger}
+	h := &api{service: service, logger: logger}
 	router := chi.NewRouter()
-	router.Use(recoveryMiddleware(logger))
+	router.Use(requestIDMiddleware)
 	router.Use(requestLoggingMiddleware(logger))
+	router.Use(recoveryMiddleware(logger))
+	router.Use(middleware.GetHead)
 
 	router.Get("/health", h.health)
-	router.Route("/api/v1/orders", func(r chi.Router) {
-		r.Post("/", h.notImplemented)
-		r.Get("/", h.notImplemented)
-		r.Get("/{id}", h.notImplemented)
-		r.Patch("/{id}/status", h.notImplemented)
-		r.Get("/{id}/history", h.notImplemented)
+	router.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
+	router.Post("/api/v1/orders", h.createOrder)
+	router.Get("/api/v1/orders", h.listOrders)
+	router.Get("/api/v1/orders/{id}", h.getOrder)
+	router.Patch("/api/v1/orders/{id}/status", h.updateStatus)
+	router.Get("/api/v1/orders/{id}/history", h.orderHistory)
+
+	methods := registeredMethods(router)
+	router.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, codeNotFound, "resource not found")
+	})
+	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		for _, method := range allowedMethods(router, methods, r) {
+			w.Header().Add("Allow", method)
+		}
+		writeError(w, http.StatusMethodNotAllowed, codeMethodNotAllowed, "method not allowed")
 	})
 
 	return router
 }
 
-func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (h *Handler) notImplemented(w http.ResponseWriter, _ *http.Request) {
-	// TODO: replace this placeholder with separate handlers for every endpoint.
-	writeJSON(w, http.StatusNotImplemented, errorResponse{
-		Error: "endpoint is not implemented",
-		Code:  "NOT_IMPLEMENTED",
+func registeredMethods(router chi.Routes) []string {
+	var methods []string
+	_ = chi.Walk(router, func(method, _ string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !slices.Contains(methods, method) {
+			methods = append(methods, method)
+		}
+		return nil
 	})
+	slices.Sort(methods)
+	return methods
 }
 
-type errorResponse struct {
-	Error string `json:"error"`
-	Code  string `json:"code"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+func allowedMethods(router chi.Routes, methods []string, r *http.Request) []string {
+	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
+	var allowed []string
+	for _, method := range methods {
+		if !router.Match(chi.NewRouteContext(), method, path) {
+			continue
+		}
+		allowed = append(allowed, method)
+		if method == http.MethodGet {
+			allowed = append(allowed, http.MethodHead)
+		}
+	}
+	return allowed
 }

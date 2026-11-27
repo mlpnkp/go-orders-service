@@ -1,0 +1,290 @@
+basePath: /
+definitions:
+  handler.errorResponse:
+    properties:
+      code:
+        example: INVALID_STATUS_TRANSITION
+        type: string
+      error:
+        example: status transition is not allowed
+        type: string
+    type: object
+  handler.healthResponse:
+    properties:
+      status:
+        example: ok
+        type: string
+    type: object
+  order.CreateOrderInput:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/order.Item'
+        type: array
+    type: object
+  order.Item:
+    properties:
+      name:
+        example: Keyboard
+        type: string
+      price:
+        example: 500000
+        type: integer
+      quantity:
+        example: 1
+        type: integer
+    type: object
+  order.Order:
+    properties:
+      created_at:
+        example: "2026-11-20T10:00:00Z"
+        type: string
+      id:
+        example: 1
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/order.Item'
+        type: array
+      status:
+        allOf:
+        - $ref: '#/definitions/order.Status'
+        enum:
+        - new
+        - processing
+        - completed
+        - cancelled
+        example: new
+      total_price:
+        example: 500000
+        type: integer
+    type: object
+  order.Status:
+    enum:
+    - new
+    - processing
+    - completed
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - StatusNew
+    - StatusProcessing
+    - StatusCompleted
+    - StatusCancelled
+  order.StatusChange:
+    properties:
+      changed_at:
+        example: "2026-11-20T10:00:00Z"
+        type: string
+      status:
+        allOf:
+        - $ref: '#/definitions/order.Status'
+        enum:
+        - new
+        - processing
+        - completed
+        - cancelled
+        example: new
+    type: object
+  order.UpdateStatusInput:
+    properties:
+      status:
+        allOf:
+        - $ref: '#/definitions/order.Status'
+        enum:
+        - new
+        - processing
+        - completed
+        - cancelled
+        example: processing
+    type: object
+info:
+  contact: {}
+  description: 'Backend service for orders: create orders, read one order or the list,
+    change status and read status history. Data is kept in memory. Prices are integers
+    in minor currency units, for example kopecks.'
+  title: Order Service API
+  version: "1.0"
+paths:
+  /api/v1/orders:
+    get:
+      description: Returns all orders in creation order.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/order.Order'
+            type: array
+        "500":
+          description: INTERNAL_ERROR
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: List orders
+      tags:
+      - orders
+    post:
+      consumes:
+      - application/json
+      description: Creates an order with status new. Every item needs a non-empty
+        name, quantity > 0 and price > 0 in minor units. total_price is the sum of
+        price * quantity.
+      parameters:
+      - description: Order items
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/order.CreateOrderInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/order.Order'
+        "400":
+          description: INVALID_JSON or VALIDATION_ERROR
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "413":
+          description: BODY_TOO_LARGE
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "500":
+          description: INTERNAL_ERROR
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: Create order
+      tags:
+      - orders
+  /api/v1/orders/{id}:
+    get:
+      parameters:
+      - description: Order ID
+        in: path
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/order.Order'
+        "400":
+          description: INVALID_ID
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "404":
+          description: ORDER_NOT_FOUND
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "500":
+          description: INTERNAL_ERROR
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: Get order
+      tags:
+      - orders
+  /api/v1/orders/{id}/history:
+    get:
+      description: Returns status changes of the order in chronological order.
+      parameters:
+      - description: Order ID
+        in: path
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/order.StatusChange'
+            type: array
+        "400":
+          description: INVALID_ID
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "404":
+          description: ORDER_NOT_FOUND
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "500":
+          description: INTERNAL_ERROR
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: Get status history
+      tags:
+      - orders
+  /api/v1/orders/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      description: 'Allowed transitions: new -> processing, new -> cancelled, processing
+        -> completed, processing -> cancelled. completed and cancelled are final.'
+      parameters:
+      - description: Order ID
+        in: path
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      - description: New status
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/order.UpdateStatusInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/order.Order'
+        "400":
+          description: INVALID_ID, INVALID_JSON or INVALID_STATUS
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "404":
+          description: ORDER_NOT_FOUND
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "409":
+          description: INVALID_STATUS_TRANSITION
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "413":
+          description: BODY_TOO_LARGE
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+        "500":
+          description: INTERNAL_ERROR
+          schema:
+            $ref: '#/definitions/handler.errorResponse'
+      summary: Change order status
+      tags:
+      - orders
+  /health:
+    get:
+      description: Returns ok when the service is up.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.healthResponse'
+      summary: Health check
+      tags:
+      - health
+swagger: "2.0"
